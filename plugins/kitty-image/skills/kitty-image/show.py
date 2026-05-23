@@ -69,6 +69,13 @@ def ensure_png_bytes(data: bytes, source_path: Path) -> bytes:
         raise RuntimeError(
             f"{source_path} is not a recognizable image format"
         ) from e
+    except Image.DecompressionBombError as e:
+        # Pillow raises this for images whose pixel count is large enough to
+        # look like a decompression bomb (default cap ~2x Image.MAX_IMAGE_PIXELS).
+        # Fail cleanly instead of letting it surface as an uncaught traceback.
+        raise RuntimeError(
+            f"{source_path} exceeds the safe pixel limit (possible decompression bomb)"
+        ) from e
 
 
 def find_claude_pty() -> str:
@@ -243,8 +250,12 @@ def main() -> int:
     # that follows. The trailing marker keeps the rows from being trimmed.
     DRIFT_MARGIN = 6
     reserved = rows + DRIFT_MARGIN
+    # Strip non-printable characters from the filename before echoing it, so a
+    # name containing terminal control/escape bytes can't smuggle anything into
+    # the output. (Defense-in-depth: this goes to stdout, not the raw PTY.)
+    safe_name = "".join(c for c in p.name if c.isprintable()) or "image"
     sys.stdout.write("\n" * (reserved - 1))
-    sys.stdout.write(f"└─ {p.name}\n")  # caption + trim guard for the blank rows
+    sys.stdout.write(f"└─ {safe_name}\n")  # caption + trim guard for the blank rows
     print(f"[kitty-image] sent {len(png_data)} bytes ({n} chunks, "
           f"{reserved} rows reserved for {rows}-row image) to {pts}{converted}",
           file=sys.stderr)
