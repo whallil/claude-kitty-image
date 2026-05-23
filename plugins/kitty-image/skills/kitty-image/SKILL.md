@@ -1,6 +1,6 @@
 ---
 name: kitty-image
-description: Display a PNG or JPEG image inline in the user's active Claude Code session running inside the Kitty terminal. Use this whenever the user asks for a chart, graph, plot, diagram, screenshot rendering, or any other visual that should appear inline in the chat. Bypasses the limitation that `kitty +kitten icat` cannot run from Claude Code's Bash tool (no controlling TTY) by injecting Kitty graphics protocol escape sequences directly into the user's PTY. ONLY works when the user is running Claude Code inside Kitty (TERM=xterm-kitty); will fail loudly with exit code 2 otherwise. Do NOT use for ASCII/Unicode block-character "graphs" — those go directly in the chat. Do NOT use outside Kitty.
+description: Use when you want to show the user an actual image inline in the terminal — a photo, an image you fetched or downloaded, an existing image file or screenshot on disk, or a chart/diagram/plot/figure you generated. Any time the user wants to SEE something, asks what something looks like, or a picture would communicate better than words, prefer obtaining the image and displaying it over describing it in prose. Renders real PNG/JPEG images via the Kitty graphics protocol; requires the Kitty terminal (TERM=xterm-kitty) and fails with exit 2 otherwise. Do NOT use for ASCII/Unicode sparklines (those go in chat) or for saving an image to disk without displaying it.
 ---
 
 # kitty-image
@@ -9,16 +9,28 @@ Display real raster images (PNG/JPEG) inline in the user's active Claude Code Ki
 
 ## When to invoke this skill
 
-Invoke whenever the user asks for any of:
-- A chart, graph, plot, dashboard, or data visualization
-- A diagram, flowchart, or rendered architecture sketch
-- A screenshot or image to be shown inline (not just saved to disk)
-- Any visual output where ASCII/Unicode block characters would be inadequate
+This is the way to put **any image** in front of the user in a Kitty terminal — not just data charts. Invoke whenever:
+- The user asks to **see** something, or **what something looks like** — a place, animal, object, person, product, artwork. Show a real image instead of describing it in prose.
+- The user points you at an **existing image file or screenshot** on disk and wants to view it.
+- You produced an image yourself — a **chart, plot, diagram, flowchart, or figure** — that should appear inline.
+- A **picture would communicate better than words** (distributions, comparisons, architecture sketches, anything visual).
+
+### You obtain the image; this skill only displays it
+
+kitty-image does **not** fetch or generate — it renders a PNG/JPEG you hand it. So when you don't already have a file, get one first:
+
+- **Real-world photo/reference (puppy, landmark, product, etc.):** use a web **search** tool (e.g. firecrawl-search, WebSearch) to find a *real* image URL from the results, download it with `curl` to `/tmp`, then display it.
+  - **Never invent, guess, or construct an image URL** — only ever use a URL that came back from an actual search/tool result. Searching for a real URL is exactly how you respect the "don't fabricate URLs" rule *and* still show the image. The rule forbids making URLs up; it does not forbid showing images.
+  - If you genuinely have no web-search/fetch tool available, say so and ask the user for a file path or URL — don't fall back to a Pillow cartoon of a real thing.
+- **Chart / diagram / figure:** render it with Pillow or matplotlib to `/tmp`, then display it.
+
+Don't let *"I don't have an image file"* stop you — obtaining the image is part of the job, not a reason to refuse.
 
 Do **not** invoke for:
 - Quick sparklines or tiny inline indicators where ASCII bars work fine
-- Cases where `TERM` is not `xterm-kitty` (the skill will fail with exit 2)
-- Saving images to disk without displaying them — just write the file
+- Cases where `TERM` is not `xterm-kitty` (the skill fails with exit 2)
+- Saving an image to disk without displaying it — just write the file
+- Questions fully answerable in words where the user didn't want a visual
 
 ## How it works (one-paragraph mental model)
 

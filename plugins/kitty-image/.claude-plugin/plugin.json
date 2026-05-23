@@ -1,6 +1,6 @@
 {
   "name": "kitty-image",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Display PNG/JPEG images inline in a Claude Code session running in the Kitty terminal, reserving layout space so following text never overlaps the image. Works around the Bash tool's lack of a controlling TTY.",
   "author": {
     "name": "Thistle Intelligence, LLC",
