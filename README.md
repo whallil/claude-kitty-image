@@ -1,5 +1,7 @@
 # claude-kitty-image
 
+[![validate](https://github.com/whallil/claude-kitty-image/actions/workflows/validate.yml/badge.svg)](https://github.com/whallil/claude-kitty-image/actions/workflows/validate.yml) [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
+
 Show real PNG/JPEG images **inline** in a [Claude Code](https://claude.com/claude-code) session running inside the [Kitty](https://sw.kovidgoyal.net/kitty/) terminal — charts, diagrams, screenshots, rendered output — without them overlapping the text Claude prints afterward.
 
 ![Example chart rendered inline in the Kitty terminal by kitty-image](assets/demo.png)
