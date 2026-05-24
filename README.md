@@ -1,6 +1,6 @@
 # claude-kitty-image
 
-[![validate](https://github.com/whallil/claude-kitty-image/actions/workflows/validate.yml/badge.svg)](https://github.com/whallil/claude-kitty-image/actions/workflows/validate.yml) [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
+[![validate](https://github.com/whallil/claude-kitty-image/actions/workflows/validate.yml/badge.svg)](https://github.com/whallil/claude-kitty-image/actions/workflows/validate.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Show real PNG/JPEG images **inline** in a [Claude Code](https://claude.com/claude-code) session running inside the [Kitty](https://sw.kovidgoyal.net/kitty/) terminal — charts, diagrams, screenshots, rendered output — without them overlapping the text Claude prints afterward.
 
@@ -60,6 +60,4 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/show.py" --clear
 
 ## License
 
-Free for **noncommercial** use under the [PolyForm Noncommercial License 1.0.0](./LICENSE) — personal projects, education, research, and use by nonprofit or government organizations.
-
-**Commercial or enterprise use requires a separate license** from Thistle Intelligence, LLC. Contact **licensing@thistleintelligence.com**.
+[MIT](./LICENSE) © Thistle Intelligence, LLC. Free to use, modify, and distribute, including commercially.

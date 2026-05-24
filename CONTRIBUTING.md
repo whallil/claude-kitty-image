@@ -43,4 +43,4 @@ Use the issue templates. For anything security-sensitive, follow [SECURITY.md](S
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the project's [PolyForm Noncommercial 1.0.0](LICENSE) license.
+By contributing, you agree that your contributions are licensed under the project's [MIT](LICENSE) license.

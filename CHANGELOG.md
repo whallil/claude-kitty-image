@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+- Relicensed from PolyForm Noncommercial 1.0.0 to MIT — free to use, modify, and distribute, including commercially.
 
 ## [0.1.2] - 2026-05-23
 ### Changed

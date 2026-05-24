@@ -6,7 +6,7 @@
     "name": "Thistle Intelligence, LLC",
     "email": "licensing@thistleintelligence.com"
   },
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "MIT",
   "homepage": "https://github.com/whallil/claude-kitty-image",
   "keywords": ["kitty", "terminal", "image", "graphics-protocol", "inline-image", "chart", "visualization"]
 }
