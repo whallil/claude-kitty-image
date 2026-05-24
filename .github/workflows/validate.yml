@@ -1,0 +1,23 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Validate JSON manifests
+        run: |
+          python3 -c "import json; json.load(open('.claude-plugin/marketplace.json')); print('marketplace.json OK')"
+          python3 -c "import json; json.load(open('plugins/kitty-image/.claude-plugin/plugin.json')); print('plugin.json OK')"
+      - name: Compile show.py
+        run: python3 -m py_compile plugins/kitty-image/skills/kitty-image/show.py
+      - name: Check SKILL.md frontmatter
+        run: |
+          head -1 plugins/kitty-image/skills/kitty-image/SKILL.md | grep -qx -- '---' && echo "SKILL.md frontmatter OK"

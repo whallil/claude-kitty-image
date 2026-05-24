@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Read the docs first
+    url: https://github.com/whallil/claude-kitty-image#readme
+    about: The README covers install, usage, and known limitations.
+  - name: Report a security issue (private)
+    url: https://github.com/whallil/claude-kitty-image/security/advisories/new
+    about: Report vulnerabilities privately — please don't open a public issue.

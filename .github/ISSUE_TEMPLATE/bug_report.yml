@@ -1,0 +1,44 @@
+name: Bug report
+description: Something isn't rendering or behaving as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please don't include anything sensitive — for security issues, follow SECURITY.md instead of filing a public issue.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Ask Claude to ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal & version
+      placeholder: "kitty 0.x  (run: kitty --version)"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "e.g. Debian 12 / Ubuntu 24.04"
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: show.py output / exit code
+      description: Paste the output of the command Claude ran (or run show.py directly).
+      render: shell
