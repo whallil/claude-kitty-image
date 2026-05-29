@@ -1,6 +1,6 @@
 ---
 name: kitty-image
-description: Use when you want to show the user an actual image inline in the terminal — a photo, an image you fetched or downloaded, an existing image file or screenshot on disk, or a chart/diagram/plot/figure you generated. Any time the user wants to SEE something, asks what something looks like, or a picture would communicate better than words, prefer obtaining the image and displaying it over describing it in prose. Renders real PNG/JPEG images via the Kitty graphics protocol; requires the Kitty terminal (TERM=xterm-kitty) and fails with exit 2 otherwise. Do NOT use for ASCII/Unicode sparklines (those go in chat) or for saving an image to disk without displaying it.
+description: Use when you want to show the user an actual image inline in the terminal — a photo, an image you fetched or downloaded, an existing image file or screenshot on disk, a chart/diagram/plot/figure you generated, or a workflow/flowchart/sequence/state/architecture diagram authored as a Mermaid definition. Any time the user wants to SEE something, asks what something looks like, asks you to diagram or visualize a workflow/process/flow, or a picture would communicate better than words, prefer obtaining the image and displaying it over describing it in prose. Renders real PNG/JPEG images via the Kitty graphics protocol, and renders Mermaid text to PNG via mermaid.py; requires the Kitty terminal (TERM=xterm-kitty) and fails with exit 2 otherwise. Do NOT use for ASCII/Unicode sparklines (those go in chat) or for saving an image to disk without displaying it.
 ---
 
 # kitty-image
@@ -13,6 +13,7 @@ This is the way to put **any image** in front of the user in a Kitty terminal �
 - The user asks to **see** something, or **what something looks like** — a place, animal, object, person, product, artwork. Show a real image instead of describing it in prose.
 - The user points you at an **existing image file or screenshot** on disk and wants to view it.
 - You produced an image yourself — a **chart, plot, diagram, flowchart, or figure** — that should appear inline.
+- The user wants to **see a workflow, process, flowchart, sequence, state machine, or architecture** — author it as a **Mermaid** definition and render it with `mermaid.py` (see "Mermaid workflow diagrams" below). This is usually the fastest way to a clean diagram; reach for it before hand-drawing boxes in Pillow.
 - A **picture would communicate better than words** (distributions, comparisons, architecture sketches, anything visual).
 
 ### You obtain the image; this skill only displays it
@@ -22,7 +23,8 @@ kitty-image does **not** fetch or generate — it renders a PNG/JPEG you hand it
 - **Real-world photo/reference (puppy, landmark, product, etc.):** use a web **search** tool (e.g. firecrawl-search, WebSearch) to find a *real* image URL from the results, download it with `curl` to `/tmp`, then display it.
   - **Never invent, guess, or construct an image URL** — only ever use a URL that came back from an actual search/tool result. Searching for a real URL is exactly how you respect the "don't fabricate URLs" rule *and* still show the image. The rule forbids making URLs up; it does not forbid showing images.
   - If you genuinely have no web-search/fetch tool available, say so and ask the user for a file path or URL — don't fall back to a Pillow cartoon of a real thing.
-- **Chart / diagram / figure:** render it with Pillow or matplotlib to `/tmp`, then display it.
+- **Chart / data figure:** render it with Pillow or matplotlib to `/tmp`, then display it.
+- **Workflow / flow / sequence / state / architecture diagram:** write a **Mermaid** definition and let `mermaid.py` render *and* display it in one step (it execs `show.py` for you). See "Mermaid workflow diagrams" below.
 
 Don't let *"I don't have an image file"* stop you — obtaining the image is part of the job, not a reason to refuse.
 
@@ -93,6 +95,58 @@ Design defaults that produce decent-looking charts:
 - Always include: title, subtitle (data source + date range), axis labels, units, and a legend if categories are present.
 - Use `DejaVuSans` (always installed on Debian/Ubuntu) at sizes 26 (title), 14 (subtitle), 13 (axis), 12 (ticks/labels).
 
+## Mermaid workflow diagrams
+
+For **workflows, flowcharts, sequence diagrams, state machines, ER/class diagrams, and architecture sketches**, don't hand-draw boxes in Pillow — write a [Mermaid](https://mermaid.js.org) definition and let `mermaid.py` render it to PNG *and* display it (it execs `show.py` for you, so all the text-overlap handling is reused).
+
+```
+1. Write the diagram to a .mmd file (use the Write tool — avoids shell-escaping
+   multi-line text). Example /tmp/flow.mmd:
+
+       graph TD
+           A[Start] --> B{Renderer available?}
+           B -->|local mmdc| C[Render offline]
+           B -->|--remote| D[mermaid.ink]
+           C --> E[Display via show.py]
+           D --> E
+
+2. Render + display in one call:
+   python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/mermaid.py" /tmp/flow.mmd
+
+3. Tell the user the diagram has been sent.
+```
+
+You can also pipe a diagram in: `... | mermaid.py -`.
+
+### Local-first, with an explicit remote opt-in (privacy)
+
+The diagram text is the payload — a workflow can encode internal architecture — so rendering is **local by default and never silently leaves the machine**:
+
+- **Local (default):** uses `mmdc` if it's on `PATH`; otherwise falls back to
+  `npx -p @mermaid-js/mermaid-cli mmdc` pointed at an already-installed Chrome
+  (`google-chrome`, `chromium`, …) via a generated Puppeteer config, with
+  `PUPPETEER_SKIP_DOWNLOAD=1` so Puppeteer never downloads its own ~150 MB Chromium.
+  First `npx` run fetches mermaid-cli (~15–20 s); cached runs are ~2 s. Fully offline thereafter.
+- **Remote (`--remote`, opt-in only):** renders via the public **mermaid.ink** service
+  (pako-encoded URL, fetched as PNG). This **sends the diagram text to a third party**,
+  so it only happens when *you* pass `--remote` — typically the fallback you offer the
+  user when there's no local renderer (exit code 10).
+
+### Options
+
+```bash
+mermaid.py <file>            # local render, dark theme, #10121a bg, 2x scale, then display
+mermaid.py <file> --remote   # render via mermaid.ink instead (sends diagram offsite)
+mermaid.py <file> --theme dark|default|forest|neutral
+mermaid.py <file> --bg '#10121a'      # or a color name, or 'transparent'
+mermaid.py <file> --scale 2           # local renderer only
+mermaid.py <file> --out /tmp/x.png    # control output path
+mermaid.py <file> --no-show           # render only; print the PNG path (e.g. for bg jobs)
+mermaid.py <file> --pts /dev/pts/N    # passthrough to show.py
+```
+
+Defaults (`--theme dark`, `--bg '#10121a'`, `--scale 2`) match the Pillow chart aesthetic above, so mermaid diagrams sit consistently alongside generated charts.
+
 ## Override and clear
 
 ```bash
@@ -105,9 +159,14 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/show.py" --clear
 
 ## Failure modes and what they mean
 
-| Exit code | Meaning | Fix |
-|-----------|---------|-----|
-| 2 | Not running inside Kitty (`TERM != xterm-kitty`) | The skill cannot help; tell the user to open the file manually or use a Kitty-compatible terminal |
-| 3 | No `claude` ancestor process found | The Bash environment is unusual; try `--pts` override |
-| 4 | Detected PTY is not writable | Permission issue on `/dev/pts/<n>`; check ownership |
-| 5 | Image file not found | Verify the path before calling the skill |
+| Exit code | Source | Meaning | Fix |
+|-----------|--------|---------|-----|
+| 2 | show.py | Not running inside Kitty (`TERM != xterm-kitty`) | The skill cannot help; tell the user to open the file manually or use a Kitty-compatible terminal |
+| 3 | show.py | No `claude` ancestor process found | The Bash environment is unusual (e.g. a background job); try `--pts` override, or render with `--no-show` and view the file another way |
+| 4 | show.py | Detected PTY is not writable | Permission issue on `/dev/pts/<n>`; check ownership |
+| 5 | show.py | Image file not found | Verify the path before calling the skill |
+| 6 | show.py | Non-PNG input couldn't be converted (Pillow missing / unrecognized format) | Install `python3-pil`, or hand it a real PNG/JPEG |
+| 10 | mermaid.py | No local mermaid renderer (`mmdc`, or `node`+Chrome) | Re-run with `--remote` to use mermaid.ink, or install mermaid-cli / a Chrome binary |
+| 11 | mermaid.py | Local render failed (usually invalid Mermaid syntax) | mmdc's stderr is forwarded above; fix the diagram |
+| 12 | mermaid.py | Remote render failed (network / service / non-PNG) | Check connectivity to mermaid.ink, or render locally |
+| 13 | mermaid.py | Input diagram not found/empty, or output path not writable | Verify the `.mmd` path / that stdin had content / that `--out`'s directory is writable |
