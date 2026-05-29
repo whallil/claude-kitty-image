@@ -6,7 +6,7 @@ Show real PNG/JPEG images **inline** in a [Claude Code](https://claude.com/claud
 
 ![Claude Code rendering a generated image inline in the Kitty terminal via kitty-image](assets/demo.png)
 
-It ships as a Claude Code **plugin** containing a single skill, `kitty-image`, that Claude invokes automatically whenever you ask for a chart, plot, diagram, or any visual that block-character ASCII can't do justice.
+It ships as a Claude Code **plugin** containing a single skill, `kitty-image`, that Claude invokes automatically whenever you ask for a chart, plot, diagram, or any visual that block-character ASCII can't do justice. It also renders **[Mermaid](https://mermaid.js.org) diagrams** — flowcharts, sequence and state diagrams, workflows — straight to an inline image (see [Mermaid diagrams](#mermaid-diagrams)).
 
 ## The problem it solves
 
@@ -25,6 +25,7 @@ The harder problem is **layout**: that graphics layer is invisible to Claude's t
 - **Kitty terminal** (`TERM=xterm-kitty`). The skill refuses to run elsewhere. Other Kitty-protocol terminals (Ghostty, WezTerm, Konsole, iTerm2) may work with a manual `--pts` override, but are untested.
 - **Python 3** (standard library only). [Pillow](https://python-pillow.org/) is optional — needed only to transcode non-PNG input (e.g. JPEG) to PNG.
 - Linux. PTY discovery reads `/proc`, so macOS is not currently supported.
+- **Mermaid rendering (optional).** For local rendering you need either [`mermaid-cli`](https://github.com/mermaid-js/mermaid-cli) (`mmdc`) on `PATH`, or `npx` (Node) plus an installed Chrome/Chromium. No local renderer? Pass `--remote` to render via the public [mermaid.ink](https://mermaid.ink) service instead — that sends the diagram text off-box, so it's opt-in only.
 
 ## Install
 
@@ -51,6 +52,29 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/show.py" /path/to/image.png --
 # Clear all images on the active PTY
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/show.py" --clear
 ```
+
+### Mermaid diagrams
+
+Write a Mermaid definition to a `.mmd` file and render it inline in one step (`mermaid.py` renders the PNG, then hands off to `show.py`):
+
+```bash
+cat > /tmp/flow.mmd <<'EOF'
+graph TD
+    A[Start] --> B{Renderer available?}
+    B -->|local mmdc| C[Render offline]
+    B -->|--remote| D[mermaid.ink]
+    C --> E[Display inline]
+    D --> E
+EOF
+
+# Local render (default): dark theme, #10121a background, 2x scale
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/mermaid.py" /tmp/flow.mmd
+
+# No local renderer? Opt in to the hosted mermaid.ink service
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/mermaid.py" /tmp/flow.mmd --remote
+```
+
+Rendering is **local-first**: the diagram text never leaves your machine unless you pass `--remote`. Flags: `--theme`, `--bg`, `--scale`, `--out`, `--no-show`, `--pts`.
 
 ## Known limitations
 

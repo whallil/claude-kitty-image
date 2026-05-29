@@ -16,8 +16,10 @@ jobs:
         run: |
           python3 -c "import json; json.load(open('.claude-plugin/marketplace.json')); print('marketplace.json OK')"
           python3 -c "import json; json.load(open('plugins/kitty-image/.claude-plugin/plugin.json')); print('plugin.json OK')"
-      - name: Compile show.py
-        run: python3 -m py_compile plugins/kitty-image/skills/kitty-image/show.py
+      - name: Compile Python scripts
+        run: |
+          python3 -m py_compile plugins/kitty-image/skills/kitty-image/show.py
+          python3 -m py_compile plugins/kitty-image/skills/kitty-image/mermaid.py
       - name: Check SKILL.md frontmatter
         run: |
           head -1 plugins/kitty-image/skills/kitty-image/SKILL.md | grep -qx -- '---' && echo "SKILL.md frontmatter OK"
