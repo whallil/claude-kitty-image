@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-30
+### Added
+- **Fit-to-screen scaling** (`placement_cells()`): images larger than the terminal are downscaled to fit, preserving aspect ratio, by passing a `(cols, rows)` box to Kitty via the `c=`/`r=` placement keys. Images that already fit are rendered pixel-for-pixel as before. This also applies to Mermaid diagrams, since `mermaid.py` displays through `show.py`.
+
+### Changed
+- `image_rows()` (reserve-only, height capped at `ws_row - 1`, which let oversized images overflow onto following text) is replaced by `placement_cells()`, which returns a concrete fit-to-screen cell box. The vertical fit reserves `DRIFT_MARGIN + 2` rows of headroom so a downscaled image plus its anchor offset stay on one screen.
+- Dropped the leading PTY newline in the placement path: with cursor policy `C=1` and the stdout row reservation, it only added an uncommitted top gap that Claude's renderer doesn't account for.
+
 ## [0.2.0] - 2026-05-29
 ### Added
 - **Mermaid diagram rendering** (`mermaid.py`): turn a Mermaid definition (flowchart, sequence, state, ER, class, architecture) into an inline PNG. Renders the diagram and hands off to `show.py` for display in one step; reads from a `.mmd` file or stdin (`-`).
@@ -31,7 +39,8 @@ All notable changes to this project are documented here. The format is based on
 - Initial release: display PNG/JPEG images inline in a Claude Code session running in the Kitty terminal, working around the Bash tool's lack of a controlling TTY.
 - stdout-based row reservation so Claude's following text does not overlap the rendered image.
 
-[Unreleased]: https://github.com/whallil/claude-kitty-image/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/whallil/claude-kitty-image/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/whallil/claude-kitty-image/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/whallil/claude-kitty-image/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/whallil/claude-kitty-image/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/whallil/claude-kitty-image/compare/v0.1.0...v0.1.1

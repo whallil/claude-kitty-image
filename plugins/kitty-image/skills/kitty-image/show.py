@@ -40,6 +40,13 @@ from pathlib import Path
 # transcoded to PNG via Pillow in ensure_png_bytes().
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
+# The image is painted to the PTY during the Bash "Running" phase, so it anchors
+# a few rows BELOW the top of the stdout reservation (the gap is ~the height of
+# the command-echo header). We over-reserve by DRIFT_MARGIN rows to absorb that
+# offset, and fit-to-screen subtracts the same margin so a downscaled image plus
+# its anchor offset still fit on one screen (no clipped bottom).
+DRIFT_MARGIN = 6
+
 
 def ensure_png_bytes(data: bytes, source_path: Path) -> bytes:
     """Return PNG bytes. Fast-path PNG; transcode anything else via Pillow.
@@ -132,48 +139,74 @@ def png_dimensions(png_bytes: bytes) -> tuple[int, int]:
     return (width, height)
 
 
-def image_rows(tty_fd: int, png_bytes: bytes) -> int:
-    """How many text rows the image occupies, so we can reserve that space.
+def placement_cells(tty_fd: int, png_bytes: bytes) -> tuple[int, int]:
+    """Return (cols, rows): the cell box the image should be displayed over.
 
-    Queries the PTY geometry (TIOCGWINSZ gives total rows + pixel size, hence
-    the per-cell pixel height) and divides the PNG's pixel height by it. Rounds
-    up so we never under-reserve (a sub-cell gap is harmless; overlap is the bug
-    we're fixing). Capped to one less than the screen height. Returns 1 if the
-    geometry can't be determined (e.g. terminal reports 0 pixels).
+    Native size is the PNG's pixel dimensions divided by the terminal's per-cell
+    pixel size (TIOCGWINSZ). If that fits the viewport, it's returned unchanged
+    so the image renders pixel-for-pixel. If it would overflow, both dimensions
+    are scaled down by a single factor so the aspect ratio is preserved (fit to
+    screen). These values are passed as the c=/r= placement keys, so Kitty does
+    the actual downscaling, and `rows` is also what the caller reserves on
+    stdout. Returns (1, 1) if the geometry can't be determined.
     """
-    _, img_h = png_dimensions(png_bytes)
-    if img_h <= 0:
-        return 1
+    img_w, img_h = png_dimensions(png_bytes)
+    if img_w <= 0 or img_h <= 0:
+        return (1, 1)
     try:
         packed = fcntl.ioctl(tty_fd, termios.TIOCGWINSZ, b"\x00" * 8)
-        ws_row, _ws_col, _ws_xpixel, ws_ypixel = struct.unpack("HHHH", packed)
+        ws_row, ws_col, ws_xpixel, ws_ypixel = struct.unpack("HHHH", packed)
     except OSError:
-        return 1
+        return (1, 1)
     if ws_row <= 0 or ws_ypixel <= 0:
-        return 1
+        return (1, 1)
     cell_h = ws_ypixel / ws_row
-    rows = math.ceil(img_h / cell_h)
-    return max(1, min(rows, ws_row - 1))
+    # Prefer real horizontal geometry; fall back to a typical 1:2 cell aspect
+    # ratio if the terminal doesn't report x-pixels.
+    cell_w = (ws_xpixel / ws_col) if (ws_col > 0 and ws_xpixel > 0) else (cell_h / 2.0)
+
+    # Round native cell size UP so we never clip a partial row/column.
+    nat_c = max(1, math.ceil(img_w / cell_w))
+    nat_r = max(1, math.ceil(img_h / cell_h))
+
+    # Headroom: one column shy of the edge (avoid wrap); and leave room at the
+    # bottom for the caption line + prompt (2) plus the drift offset the image
+    # picks up from anchoring below the reservation (DRIFT_MARGIN), so a
+    # downscaled image fits fully on screen rather than clipping at the bottom.
+    avail_c = max(1, (ws_col - 1) if ws_col > 0 else nat_c)
+    avail_r = max(1, ws_row - 2 - DRIFT_MARGIN)
+
+    if nat_c <= avail_c and nat_r <= avail_r:
+        return (nat_c, nat_r)
+
+    # Overflow: scale both dims by one factor so aspect ratio is preserved.
+    scale = min(avail_c / nat_c, avail_r / nat_r)
+    fit_c = max(1, min(avail_c, round(nat_c * scale)))
+    fit_r = max(1, min(avail_r, round(nat_r * scale)))
+    return (fit_c, fit_r)
 
 
 def send_kitty_graphics(png_bytes: bytes, pts_path: str) -> tuple[int, int]:
     """Write Kitty graphics protocol escapes to pts_path.
 
     Returns (chunk_count, image_rows). We set cursor policy C=1 so the image
-    placement does not move the cursor; the caller reserves vertical space via
-    stdout (see main) rather than via PTY newlines, because directly-injected
+    placement does not move the cursor, and pass c=/r= so Kitty scales the image
+    to fit the viewport (see placement_cells). The caller reserves vertical space
+    via stdout (see main) rather than via PTY newlines, because directly-injected
     newlines don't survive Claude Code's independent screen repaint.
     """
     b64 = base64.standard_b64encode(png_bytes).decode("ascii")
     chunk_size = 4096
     chunks = [b64[i : i + chunk_size] for i in range(0, len(b64), chunk_size)]
     with open(pts_path, "w") as tty:
-        rows = image_rows(tty.fileno(), png_bytes)
-        tty.write("\n")  # leading newline so image doesn't collide with cursor row
+        cols, rows = placement_cells(tty.fileno(), png_bytes)
+        # No leading newline: C=1 keeps the cursor put, and the stdout block (see
+        # main) reserves the rows, so a leading PTY newline only adds an
+        # uncommitted top gap that Claude's renderer doesn't account for.
         for i, chunk in enumerate(chunks):
             more = 1 if i < len(chunks) - 1 else 0
             if i == 0:
-                tty.write(f"\x1b_Gf=100,a=T,C=1,m={more};{chunk}\x1b\\")
+                tty.write(f"\x1b_Gf=100,a=T,C=1,c={cols},r={rows},m={more};{chunk}\x1b\\")
             else:
                 tty.write(f"\x1b_Gm={more};{chunk}\x1b\\")
         tty.flush()
@@ -241,14 +274,10 @@ def main() -> int:
     # Reserve the image's height as REAL rows in Claude's committed tool-result
     # block. stdout is the only channel Claude's renderer accounts for, so blank
     # lines here scroll and pack correctly with the rest of the conversation;
-    # newlines written to the PTY do not.
-    #
-    # The image is drawn to the PTY during the "Running" phase, so it anchors a
-    # few rows BELOW the top of this stdout block (the gap is ~the height of the
-    # command-echo header). DRIFT_MARGIN over-reserves to absorb that offset so
-    # the image floats inside the blank block instead of spilling onto the text
-    # that follows. The trailing marker keeps the rows from being trimmed.
-    DRIFT_MARGIN = 6
+    # newlines written to the PTY do not. DRIFT_MARGIN (module-level) over-reserves
+    # to absorb the anchor offset so the image floats inside the blank block
+    # instead of spilling onto the text that follows; the trailing caption marker
+    # keeps the rows from being trimmed as trailing whitespace.
     reserved = rows + DRIFT_MARGIN
     # Strip non-printable characters from the filename before echoing it, so a
     # name containing terminal control/escape bytes can't smuggle anything into
