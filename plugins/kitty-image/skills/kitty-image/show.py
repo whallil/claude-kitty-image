@@ -185,7 +185,7 @@ def placement_cells(tty_fd: int, png_bytes: bytes, fit_height: bool = True) -> t
     return fit_cells(img_w, img_h, ws_row, ws_col, ws_xpixel, ws_ypixel, fit_height)
 
 
-def send_kitty_graphics(png_bytes: bytes, pts_path: str) -> tuple[int, int]:
+def send_kitty_graphics(png_bytes: bytes, pts_path: str, fit_height: bool = True) -> tuple[int, int]:
     """Write Kitty graphics protocol escapes to pts_path.
 
     Returns (chunk_count, image_rows). We set cursor policy C=1 so the image
@@ -198,7 +198,7 @@ def send_kitty_graphics(png_bytes: bytes, pts_path: str) -> tuple[int, int]:
     chunk_size = 4096
     chunks = [b64[i : i + chunk_size] for i in range(0, len(b64), chunk_size)]
     with open(pts_path, "w") as tty:
-        cols, rows = placement_cells(tty.fileno(), png_bytes)
+        cols, rows = placement_cells(tty.fileno(), png_bytes, fit_height)
         # No leading newline: C=1 keeps the cursor put, and the stdout block (see
         # main) reserves the rows, so a leading PTY newline only adds an
         # uncommitted top gap that Claude's renderer doesn't account for.
@@ -230,6 +230,9 @@ def main() -> int:
     ap.add_argument("image", nargs="?", help="path to PNG/JPEG image")
     ap.add_argument("--pts", help="override auto-detected PTY (e.g. /dev/pts/4)")
     ap.add_argument("--clear", action="store_true", help="delete all images on the terminal")
+    ap.add_argument("--scroll", action="store_true",
+                    help="fit to width only and leave the height uncapped so a tall "
+                         "image scrolls (instead of being shrunk to fit the screen)")
     args = ap.parse_args()
 
     if not args.clear and not args.image:
@@ -268,7 +271,7 @@ def main() -> int:
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
         return 6
-    n, rows = send_kitty_graphics(png_data, pts)
+    n, rows = send_kitty_graphics(png_data, pts, fit_height=not args.scroll)
     converted = "" if png_data is data else " (converted to PNG)"
     # Reserve the image's height as REAL rows in Claude's committed tool-result
     # block. stdout is the only channel Claude's renderer accounts for, so blank
