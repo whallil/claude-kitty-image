@@ -139,51 +139,50 @@ def png_dimensions(png_bytes: bytes) -> tuple[int, int]:
     return (width, height)
 
 
-def placement_cells(tty_fd: int, png_bytes: bytes) -> tuple[int, int]:
-    """Return (cols, rows): the cell box the image should be displayed over.
+def fit_cells(img_w: int, img_h: int, ws_row: int, ws_col: int,
+              ws_xpixel: int, ws_ypixel: int, fit_height: bool = True) -> tuple[int, int]:
+    """Pure sizing math: native image px + terminal geometry -> (cols, rows).
 
-    Native size is the PNG's pixel dimensions divided by the terminal's per-cell
-    pixel size (TIOCGWINSZ). If that fits the viewport, it's returned unchanged
-    so the image renders pixel-for-pixel. If it would overflow, both dimensions
-    are scaled down by a single factor so the aspect ratio is preserved (fit to
-    screen). These values are passed as the c=/r= placement keys, so Kitty does
-    the actual downscaling, and `rows` is also what the caller reserves on
-    stdout. Returns (1, 1) if the geometry can't be determined.
+    fit_height=True  (default): fit BOTH dims to the viewport (the v0.3.0 path).
+    fit_height=False (--scroll): fit WIDTH only; never upscale; leave the height
+        uncapped so the image scrolls. The terminal width is an upper bound, not
+        a target — a capture narrower than the terminal keeps its native width.
+    Returns (1, 1) when geometry is unusable.
     """
-    img_w, img_h = png_dimensions(png_bytes)
-    if img_w <= 0 or img_h <= 0:
+    if img_w <= 0 or img_h <= 0 or ws_row <= 0 or ws_ypixel <= 0:
         return (1, 1)
+    cell_h = ws_ypixel / ws_row
+    cell_w = (ws_xpixel / ws_col) if (ws_col > 0 and ws_xpixel > 0) else (cell_h / 2.0)
+    nat_c = max(1, math.ceil(img_w / cell_w))
+    nat_r = max(1, math.ceil(img_h / cell_h))
+    avail_c = max(1, (ws_col - 1) if ws_col > 0 else nat_c)
+
+    if not fit_height:
+        # Fit width only. Never enlarge; height uncapped (scrolls).
+        if nat_c <= avail_c:
+            return (nat_c, nat_r)
+        scale = avail_c / nat_c
+        return (avail_c, max(1, round(nat_r * scale)))
+
+    avail_r = max(1, ws_row - 2 - DRIFT_MARGIN)
+    if nat_c <= avail_c and nat_r <= avail_r:
+        return (nat_c, nat_r)
+    scale = min(avail_c / nat_c, avail_r / nat_r)
+    fit_c = max(1, min(avail_c, round(nat_c * scale)))
+    fit_r = max(1, min(avail_r, round(nat_r * scale)))
+    return (fit_c, fit_r)
+
+
+def placement_cells(tty_fd: int, png_bytes: bytes, fit_height: bool = True) -> tuple[int, int]:
+    """Return (cols, rows) for the image, querying the PTY geometry then
+    delegating the math to fit_cells(). See fit_cells for the fit_height modes."""
+    img_w, img_h = png_dimensions(png_bytes)
     try:
         packed = fcntl.ioctl(tty_fd, termios.TIOCGWINSZ, b"\x00" * 8)
         ws_row, ws_col, ws_xpixel, ws_ypixel = struct.unpack("HHHH", packed)
     except OSError:
         return (1, 1)
-    if ws_row <= 0 or ws_ypixel <= 0:
-        return (1, 1)
-    cell_h = ws_ypixel / ws_row
-    # Prefer real horizontal geometry; fall back to a typical 1:2 cell aspect
-    # ratio if the terminal doesn't report x-pixels.
-    cell_w = (ws_xpixel / ws_col) if (ws_col > 0 and ws_xpixel > 0) else (cell_h / 2.0)
-
-    # Round native cell size UP so we never clip a partial row/column.
-    nat_c = max(1, math.ceil(img_w / cell_w))
-    nat_r = max(1, math.ceil(img_h / cell_h))
-
-    # Headroom: one column shy of the edge (avoid wrap); and leave room at the
-    # bottom for the caption line + prompt (2) plus the drift offset the image
-    # picks up from anchoring below the reservation (DRIFT_MARGIN), so a
-    # downscaled image fits fully on screen rather than clipping at the bottom.
-    avail_c = max(1, (ws_col - 1) if ws_col > 0 else nat_c)
-    avail_r = max(1, ws_row - 2 - DRIFT_MARGIN)
-
-    if nat_c <= avail_c and nat_r <= avail_r:
-        return (nat_c, nat_r)
-
-    # Overflow: scale both dims by one factor so aspect ratio is preserved.
-    scale = min(avail_c / nat_c, avail_r / nat_r)
-    fit_c = max(1, min(avail_c, round(nat_c * scale)))
-    fit_r = max(1, min(avail_r, round(nat_r * scale)))
-    return (fit_c, fit_r)
+    return fit_cells(img_w, img_h, ws_row, ws_col, ws_xpixel, ws_ypixel, fit_height)
 
 
 def send_kitty_graphics(png_bytes: bytes, pts_path: str) -> tuple[int, int]:
