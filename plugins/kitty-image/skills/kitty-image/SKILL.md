@@ -1,6 +1,6 @@
 ---
 name: kitty-image
-description: Use when you want to show the user an actual image inline in the terminal — a photo, an image you fetched or downloaded, an existing image file or screenshot on disk, a chart/diagram/plot/figure you generated, or a workflow/flowchart/sequence/state/architecture diagram authored as a Mermaid definition. Any time the user wants to SEE something, asks what something looks like, asks you to diagram or visualize a workflow/process/flow, or a picture would communicate better than words, prefer obtaining the image and displaying it over describing it in prose. Renders real PNG/JPEG images via the Kitty graphics protocol, and renders Mermaid text to PNG via mermaid.py; requires the Kitty terminal (TERM=xterm-kitty) and fails with exit 2 otherwise. Do NOT use for ASCII/Unicode sparklines (those go in chat) or for saving an image to disk without displaying it.
+description: Use when you want to show the user an actual image inline in the terminal — a photo, an image you fetched or downloaded, an existing image file or screenshot on disk, a chart/diagram/plot/figure you generated, or a workflow/flowchart/sequence/state/architecture diagram authored as a Mermaid definition. Any time the user wants to SEE something, asks what something looks like, asks you to diagram or visualize a workflow/process/flow, or a picture would communicate better than words, prefer obtaining the image and displaying it over describing it in prose. Renders real PNG/JPEG images via the Kitty graphics protocol, and renders Mermaid text to PNG via mermaid.py; requires the Kitty terminal (TERM=xterm-kitty) and fails with exit 2 otherwise. Do NOT use for ASCII/Unicode sparklines (those go in chat) or for saving an image to disk without displaying it. Also renders a web page or HTML (a live URL, a local .html file, or an HTML string) to an inline image via html.py (headless Chrome).
 ---
 
 # kitty-image
@@ -14,6 +14,7 @@ This is the way to put **any image** in front of the user in a Kitty terminal �
 - The user points you at an **existing image file or screenshot** on disk and wants to view it.
 - You produced an image yourself — a **chart, plot, diagram, flowchart, or figure** — that should appear inline.
 - The user wants to **see a workflow, process, flowchart, sequence, state machine, or architecture** — author it as a **Mermaid** definition and render it with `mermaid.py` (see "Mermaid workflow diagrams" below). This is usually the fastest way to a clean diagram; reach for it before hand-drawing boxes in Pillow.
+- The user wants to **see a web page, a URL, or a chunk of HTML** as it renders — use `html.py` (headless Chrome screenshot). Viewport by default; `--selector` for one element; `--full-page` for the whole page (shown scrolling, not shrunk).
 - A **picture would communicate better than words** (distributions, comparisons, architecture sketches, anything visual).
 
 ### You obtain the image; this skill only displays it
@@ -156,6 +157,43 @@ mermaid.py <file> --pts /dev/pts/N    # passthrough to show.py
 
 Defaults (`--theme dark`, `--bg '#10121a'`, `--scale 2`) match the Pillow chart aesthetic above, so mermaid diagrams sit consistently alongside generated charts.
 
+## HTML & web page rendering
+
+Render a **live URL, a local `.html` file, or an HTML string (stdin)** to a PNG
+and display it inline with `html.py`. Like `mermaid.py`, it execs `show.py`, so
+all the PTY/fit-to-screen handling is reused. It drives **Puppeteer-core pointed
+at your system Chrome** — the same browser `mermaid.py` uses; puppeteer-core is
+installed once into `${XDG_CACHE_HOME:-~/.cache}/kitty-image` and downloads no
+Chromium.
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/html.py" https://example.com
+echo '<h1 style="font:48px sans-serif">hi</h1>' | python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/html.py" -
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/html.py" page.html --selector '.hero'
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/html.py" https://x.com --full-page
+```
+
+### Capture modes
+- **Viewport (default):** the visible window at `--viewport WxH` (default `1280x800`). Best for inline display.
+- **`--selector <css>`:** screenshot just the first matching element — crisp, ideal for one component.
+- **`--full-page`:** the entire scroll height. Displayed via `show.py --scroll` (fit-to-width, **scrollable**, not shrunk to fit), so it stays readable. Defaults to `--scale 1` to keep the row count sane.
+
+### Options
+```
+--viewport WxH   render viewport (default 1280x800)
+--scale N        device scale factor (default 2; 1 for --full-page)
+--wait MS        extra wait after network-idle (default 0)
+--timeout MS     navigation/selector timeout (default 30000)
+--out PATH       output PNG (default /tmp/html.png)
+--no-show        render only; print the path
+--pts /dev/pts/N passthrough to show.py
+```
+
+### Privacy & requirements
+- **Local file / stdin render fully offline**; a **live URL** fetches that page (its whole point) and makes no other calls. There is **no third-party screenshot service**.
+- Needs `node`/`npm` (already required by `mermaid.py`) and a system Chrome/Chromium **plus its OS libraries** (`libnss3`, `libgbm`, `libasound2`, …). These can't be auto-installed; on a bare server install them with your package manager. Exit codes: `20` no renderer/Chrome, `21` load failed, `22` selector not found, `23` bad input/output.
+- For crisp inline output prefer viewport or `--selector`; `--full-page` is for scrolling through or saving with `--no-show`.
+
 ## Override and clear
 
 ```bash
@@ -179,3 +217,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/show.py" --clear
 | 11 | mermaid.py | Local render failed (usually invalid Mermaid syntax) | mmdc's stderr is forwarded above; fix the diagram |
 | 12 | mermaid.py | Remote render failed (network / service / non-PNG) | Check connectivity to mermaid.ink, or render locally |
 | 13 | mermaid.py | Input diagram not found/empty, or output path not writable | Verify the `.mmd` path / that stdin had content / that `--out`'s directory is writable |
+| 20 | html.py | No usable renderer — no `npm`/Node, or no Chrome/Chromium found | Install Node and a Chrome/Chromium (and its OS libs); see message |
+| 21 | html.py | Navigation/load failed — bad URL, timeout, or missing local file | Check the URL/path and connectivity; raise `--timeout` |
+| 22 | html.py | `--selector` element not found before timeout | Fix the selector or raise `--timeout` |
+| 23 | html.py | Input/output error — empty stdin, or output dir not writable | Provide HTML on stdin / choose a writable `--out` |

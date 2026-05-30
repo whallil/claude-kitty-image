@@ -76,6 +76,24 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/kitty-image/mermaid.py" /tmp/flow.mmd --re
 
 Rendering is **local-first**: the diagram text never leaves your machine unless you pass `--remote`. Flags: `--theme`, `--bg`, `--scale`, `--out`, `--no-show`, `--pts`.
 
+### HTML & web pages
+
+Render a live URL, a local `.html` file, or an HTML string (stdin) to an inline
+image with `html.py` — a headless-Chrome screenshot that hands off to `show.py`.
+It uses your **system Chrome** (no Chromium download); `puppeteer-core` is
+installed once into `~/.cache/kitty-image`.
+
+```bash
+html.py https://example.com                 # viewport screenshot
+html.py page.html --selector '.hero'         # just one element
+html.py https://example.com --full-page      # whole page, shown scrolling
+echo '<h1>hi</h1>' | html.py -                # HTML from stdin
+```
+
+Local files and stdin render fully offline; a URL fetches only that page (no
+third-party screenshot service). Requires Node and a Chrome/Chromium plus its OS
+libraries.
+
 ## Known limitations
 
 - **Drift margin is a heuristic.** Space reservation adds a small fixed margin to absorb the offset between where the image anchors and where the reserved rows land. For the skill's normal one-line invocation this is stable; a pathologically long, wrapping command could still clip a row or two.

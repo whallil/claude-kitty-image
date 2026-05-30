@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-30
+### Added
+- **HTML → inline image** (`html.py`): render a live URL, a local HTML file, or stdin HTML to a PNG and display it inline. Drives Puppeteer-core against the system Chrome (installed once into a user cache; no Chromium download), then hands off to `show.py`. Capture modes: viewport (default), `--selector` (one element), `--full-page`.
+- `show.py --scroll`: fit-to-width display with uncapped, scrollable height — never upscales. Used for full-page captures so long pages stay readable instead of being shrunk to fit.
+
+### Changed
+- Extracted shared browser/PNG/display helpers into `_chrome.py`, used by both `mermaid.py` and `html.py` (no behavior change to mermaid rendering).
+- `show.py`'s sizing math is now a pure `fit_cells()` function (unit-tested); default fit-to-screen behavior is unchanged.
+
 ## [0.3.0] - 2026-05-30
 ### Added
 - **Fit-to-screen scaling** (`placement_cells()`): images larger than the terminal are downscaled to fit, preserving aspect ratio, by passing a `(cols, rows)` box to Kitty via the `c=`/`r=` placement keys. Images that already fit are rendered pixel-for-pixel as before. This also applies to Mermaid diagrams, since `mermaid.py` displays through `show.py`.
@@ -39,7 +48,8 @@ All notable changes to this project are documented here. The format is based on
 - Initial release: display PNG/JPEG images inline in a Claude Code session running in the Kitty terminal, working around the Bash tool's lack of a controlling TTY.
 - stdout-based row reservation so Claude's following text does not overlap the rendered image.
 
-[Unreleased]: https://github.com/whallil/claude-kitty-image/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/whallil/claude-kitty-image/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/whallil/claude-kitty-image/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/whallil/claude-kitty-image/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/whallil/claude-kitty-image/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/whallil/claude-kitty-image/compare/v0.1.1...v0.1.2
