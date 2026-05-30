@@ -50,18 +50,13 @@ import urllib.request
 import zlib
 from pathlib import Path
 
-PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-SKILL_DIR = Path(__file__).resolve().parent
-SHOW_PY = SKILL_DIR / "show.py"
-
-# Chrome/Chromium binaries to reuse, in preference order. Reusing a system
-# browser keeps Puppeteer from downloading its own copy.
-CHROME_CANDIDATES = (
-    "google-chrome",
-    "google-chrome-stable",
-    "chromium",
-    "chromium-browser",
-    "chrome",
+from _chrome import (
+    CHROME_CANDIDATES,
+    PNG_MAGIC,
+    display,
+    find_chrome,
+    is_png,
+    write_puppeteer_config,
 )
 
 # npm package spec for the npx fallback; override to pin a version if needed.
@@ -98,37 +93,8 @@ def default_out_path(source: str) -> Path:
 
 
 # --------------------------------------------------------------------------- #
-# Backend detection
-# --------------------------------------------------------------------------- #
-def find_chrome() -> str | None:
-    """Return the path to a usable Chrome/Chromium binary, or None."""
-    for name in CHROME_CANDIDATES:
-        path = shutil.which(name)
-        if path:
-            return path
-    return None
-
-
-# --------------------------------------------------------------------------- #
 # Local rendering (mmdc / npx)
 # --------------------------------------------------------------------------- #
-def _write_puppeteer_config(chrome: str | None, tmpdir: str) -> str:
-    """Write a puppeteer config JSON and return its path.
-
-    `executablePath` (when a system Chrome was found) is the officially
-    documented, version-robust way to reuse an installed browser. `--no-sandbox`
-    is required when running headless Chrome as root or in many containers;
-    `--disable-gpu` avoids GPU init noise in headless environments.
-    """
-    cfg: dict = {"args": ["--no-sandbox", "--disable-gpu"]}
-    if chrome:
-        cfg["executablePath"] = chrome
-    path = os.path.join(tmpdir, "puppeteer.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f)
-    return path
-
-
 def render_local(diagram: str, out: Path, theme: str, bg: str, scale: int) -> None:
     """Render via mermaid-cli. Exits 10 if no local renderer, 11 on render error.
 
@@ -161,7 +127,7 @@ def render_local(diagram: str, out: Path, theme: str, bg: str, scale: int) -> No
         mmd_path = os.path.join(tmpdir, "diagram.mmd")
         with open(mmd_path, "w", encoding="utf-8") as f:
             f.write(diagram)
-        cfg_path = _write_puppeteer_config(chrome, tmpdir)
+        cfg_path = write_puppeteer_config(chrome, tmpdir)
 
         cmd = [
             *base_cmd,
@@ -181,7 +147,7 @@ def render_local(diagram: str, out: Path, theme: str, bg: str, scale: int) -> No
             env["PUPPETEER_EXECUTABLE_PATH"] = chrome
 
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
-        if proc.returncode != 0 or not _is_png(out):
+        if proc.returncode != 0 or not is_png(out):
             sys.stderr.write(proc.stdout)
             sys.stderr.write(proc.stderr)
             if proc.returncode != 0:
@@ -274,25 +240,6 @@ def render_remote(diagram: str, out: Path, theme: str, bg: str) -> None:
     except OSError as e:
         print(f"error: could not write output {out}: {e}", file=sys.stderr)
         sys.exit(13)
-
-
-# --------------------------------------------------------------------------- #
-# Display handoff
-# --------------------------------------------------------------------------- #
-def _is_png(path: Path) -> bool:
-    try:
-        with open(path, "rb") as f:
-            return f.read(len(PNG_MAGIC)) == PNG_MAGIC
-    except OSError:
-        return False
-
-
-def display(png: Path, pts: str | None) -> int:
-    """Exec show.py on the rendered PNG; return its exit code."""
-    cmd = [sys.executable, str(SHOW_PY), str(png)]
-    if pts:
-        cmd += ["--pts", pts]
-    return subprocess.run(cmd).returncode
 
 
 # --------------------------------------------------------------------------- #
