@@ -4,9 +4,11 @@
 
 Add an `html.py` to the kitty-image skill that renders **a live URL, a local HTML
 file, or a raw HTML string (stdin)** to a PNG and displays it inline, reusing
-`show.py` for display. It drives **Puppeteer-core via `npx`** pointed at the
-user's already-installed Chrome — the same dependency `mermaid.py` already relies
-on, so users need nothing new.
+`show.py` for display. It drives **Puppeteer-core pointed at the user's
+already-installed Chrome** — the same browser `mermaid.py` relies on, so users
+need no new browser. Puppeteer-core is installed once into a small user cache
+dir via `npm install --prefix` (validated: ~1s, 26 packages, **downloads no
+Chromium**); the script then runs with `NODE_PATH` pointing at that cache.
 
 Three capture modes: **viewport** (default), **single element by CSS selector**,
 and **full page**. Full-page introduces a new display mode in `show.py`:
@@ -17,8 +19,9 @@ page to fit the screen, which would render it illegible).
 
 - Render URL / local file / stdin HTML to PNG and display inline via `show.py`.
 - Three capture modes: viewport (default), `--selector <css>`, `--full-page`.
-- Zero new install burden: reuse system Chrome through `npx -p puppeteer-core`,
-  exactly mirroring `mermaid.py`'s Chrome handling.
+- Zero new *browser* install: reuse system Chrome (puppeteer-core never
+  downloads one), mirroring `mermaid.py`'s Chrome handling. The only fetch is a
+  one-time ~1s `npm install` of puppeteer-core into a user cache.
 - Full-page captures display at readable size and **scroll**, instead of being
   downscaled to a washed-out thumbnail.
 
@@ -68,9 +71,12 @@ source (URL | file | '-')
 _chrome.py.find_chrome()  ──none──> exit 20 (clear "install Chrome" message)
       │ chrome path
       ▼
-npx -p puppeteer-core node _snap.js  (env: PUPPETEER_SKIP_DOWNLOAD=1,
-      │    PUPPETEER_EXECUTABLE_PATH=<chrome>)              args/config below
-      │    launch(executablePath, args=[--no-sandbox,--disable-gpu])
+ensure puppeteer-core in cache  ──no npm──> exit 20
+      │    if not <cache>/node_modules/puppeteer-core:
+      │       npm install --prefix <cache> --no-save --no-audit --no-fund puppeteer-core
+      ▼
+node _snap.js   (env: NODE_PATH=<cache>/node_modules, SNAP_CFG=<json>)
+      │    launch(executablePath=<chrome>, args=[--no-sandbox,--disable-gpu], headless:true)
       │    page.setViewport({width,height,deviceScaleFactor:scale})
       │    page.goto(url, {waitUntil:'networkidle2', timeout})
       │    [--wait ms] optional fixed delay
@@ -163,7 +169,7 @@ Distinct range from `mermaid.py`'s 10–13 to keep diagnostics unambiguous:
 |------|---------|
 | 0  | success |
 | 2  | usage error (argparse: bad flags, viewport format, full-page+selector) |
-| 20 | no usable renderer — `npx`/Node missing, or no Chrome/Chromium found (message lists candidates + how to install) |
+| 20 | no usable renderer — `npm`/Node missing, or no Chrome/Chromium found (message lists candidates + how to install) |
 | 21 | navigation/load failed — bad URL, network error, timeout, or missing local `file://` |
 | 22 | `--selector` element not found before timeout |
 | 23 | input/output error — empty stdin, or output path/dir not writable |
@@ -191,7 +197,7 @@ The repo has no test suite yet; add a small `tests/` (pytest):
   - `placement_cells(..., fit_height=False)`: width-fit, height uncapped;
     `fit_height=True` unchanged (regression guard for v0.3.0).
 - **Integration (smoke):** render a tiny local HTML file to PNG and assert PNG
-  magic + plausible dimensions; auto-`skip` when `npx`/Node or Chrome is absent
+  magic + plausible dimensions; auto-`skip` when `npm`/Node or Chrome is absent
   so CI without a browser still passes.
 
 ## Docs & version
@@ -204,11 +210,17 @@ The repo has no test suite yet; add a small `tests/` (pytest):
   for crisp inline output (full-page is for scrolling/saving).
 - `README.md` feature list + `CHANGELOG.md` `[0.4.0]`.
 
-## Open implementation risks (validate early in the plan)
+## Resolved during design (spike on 2026-05-30)
 
-- **`npx -p puppeteer-core node _snap.js` module resolution:** confirm
-  `require('puppeteer-core')` resolves from the npx-provisioned package; if not,
-  set `NODE_PATH` from the npx prefix or install into a cache dir. A 5-minute
-  spike at the start of implementation de-risks this.
-- First `npx` run fetches `puppeteer-core` (small; no Chromium download); cached
-  thereafter — same first-run latency note as `mermaid.py`.
+- **Module resolution — RESOLVED.** `npx -p puppeteer-core node _snap.js` does
+  *not* make `require('puppeteer-core')` resolvable (`-p` only exposes bins). The
+  working mechanism, verified end-to-end, is: `npm install --prefix <cache>
+  puppeteer-core` (once), then run `node _snap.js` with
+  `NODE_PATH=<cache>/node_modules`. Install was ~1s / 26 packages with **no
+  Chromium download**. All three capture modes produced correct PNGs against
+  system Chrome (viewport 1800×1200, full-page 1800×3196, selector 1332×496 at
+  `--viewport 900x600 --scale 2`).
+- **Cache location:** `${XDG_CACHE_HOME:-~/.cache}/kitty-image/node_modules`
+  (writable; the plugin install dir is version-pinned/possibly read-only).
+- **First-run cost:** one ~1s `npm install` if the cache is empty; instant after.
+  Requires `npm` on PATH (ships with the Node `mermaid.py` already needs).
