@@ -38,7 +38,9 @@ Do **not** invoke for:
 
 The Bash tool runs in a process with no controlling TTY, which is why `kitty +kitten icat` fails (`OSError: No such device or address: '/dev/tty'`). This skill bypasses that by walking the process tree to find the user's `claude` ancestor, reading its TTY from `/proc/<pid>/stat`, and writing Kitty graphics protocol escape sequences (`\x1b_G...\x1b\\`) directly to that PTY. Kitty intercepts the escapes at the terminal-emulator layer and renders the image into its image plane, on top of the text grid that the claude TUI is drawing. The image persists through claude's normal redraws because it lives on a separate render layer.
 
-**Avoiding text overlap (important).** The image lives on Kitty's graphics layer, which Claude Code's renderer knows nothing about — so by default Claude packs its subsequent text right over the image's rows. Newlines written to the PTY don't help: Claude repaints from its own screen model and discards them. The fix is to reserve real vertical space in the one channel Claude *does* commit — the tool's **stdout**. `show.py` measures the image's row-height (PNG pixel height ÷ the PTY's per-cell pixel height from `TIOCGWINSZ`) and prints that many blank lines to stdout, so Claude reserves genuine rows that scroll and pack with the conversation. Two wrinkles are handled: the image anchors a few rows below the reserved block (it's drawn during the "Running" phase while stdout lays out afterward), so a `DRIFT_MARGIN` over-reserves to absorb the offset; and a trailing caption line (`└─ <filename>`) prevents the blank rows from being trimmed as trailing whitespace.
+**Avoiding text overlap (important).** The image lives on Kitty's graphics layer, which Claude Code's renderer knows nothing about — so by default Claude packs its subsequent text right over the image's rows. Newlines written to the PTY don't help: Claude repaints from its own screen model and discards them. The fix is to reserve real vertical space in the one channel Claude *does* commit — the tool's **stdout**. `show.py` computes the image's cell box (`placement_cells()`: PNG pixel size ÷ the PTY's per-cell pixel size from `TIOCGWINSZ`) and prints that many blank lines to stdout, so Claude reserves genuine rows that scroll and pack with the conversation. Two wrinkles are handled: the image anchors a few rows below the reserved block (it's drawn during the "Running" phase while stdout lays out afterward), so a `DRIFT_MARGIN` over-reserves to absorb the offset; and a trailing caption line (`└─ <filename>`) prevents the blank rows from being trimmed as trailing whitespace.
+
+**Fit-to-screen (oversized images).** `placement_cells()` returns a concrete `(cols, rows)` box, which `show.py` passes as the Kitty `c=`/`r=` placement keys so Kitty scales the image into that box. If the native size already fits the viewport it's returned unchanged (pixel-for-pixel); if it would overflow, both dimensions are scaled down by a single factor so the aspect ratio is preserved. The box leaves one column of horizontal headroom (no wrap) and `DRIFT_MARGIN + 2` rows of vertical headroom, so a downscaled image plus its anchor offset still fit on one screen rather than clipping at the bottom.
 
 ## Workflow
 
@@ -57,7 +59,8 @@ The Bash tool runs in a process with no controlling TTY, which is why `kitty +ki
 ## Caveats to communicate to the user
 
 - **Text overlap is handled, with a margin.** The skill reserves vertical space sized to the image (see "Avoiding text overlap" above), so following text lands below the image rather than on top of it. The reservation includes a fixed `DRIFT_MARGIN` (currently 6 rows) to absorb the offset between the image anchor and the stdout block. This is a heuristic tuned to the skill's normal one-line invocation — if the command echo is unusually tall (e.g. a very long image path that wraps), the drift can grow and a couple of rows of overlap may reappear.
-- **Images taller than the screen.** `image_rows()` caps reservation at `ws_row - 1`, so an image taller than the terminal can't be fully reserved and will overflow onto following text. For oversized images, fit-to-screen downscaling via the Kitty `r=` placement key would be needed (not yet implemented).
+- **Vertical placement is approximate.** Height (row count) is matched exactly, but the image's *start row* can drift by a few rows: it's painted at the PTY cursor during the "Running" phase while Claude Code lays out the committed stdout block independently, and the exact offset between the two is scroll/timing-dependent and partly controlled by Claude's renderer. Expect a small, usually-harmless top or bottom gap; it is not pixel-stable.
+- **Images taller than the screen are scaled to fit.** `placement_cells()` downscales an oversized image (preserving aspect) to `ws_col - 1` × `ws_row - 2 - DRIFT_MARGIN` cells and hands Kitty the `c=`/`r=` keys to do the resampling, so tall or huge images no longer overflow onto following text. Trade-off: a very tall image is shrunk to fit the current window height, so a shorter terminal yields a smaller image — resize the window taller (or open the file externally) if you need more detail.
 - **Persistence.** The image stays on screen until Kitty scrolls it out of viewport, the user clears the screen, or `--clear` is invoked. Claude Code redraws do NOT remove it.
 - **Kitty-only.** This trick exploits the Kitty Graphics Protocol. It will not work in xterm, gnome-terminal, alacritty, or any terminal that doesn't speak that protocol. The skill checks `TERM=xterm-kitty` and refuses if it doesn't match.
 - **Other Kitty-protocol terminals** (Ghostty, iTerm2, Konsole, Warp, WezTerm) *may* work if the user overrides with `--pts /dev/pts/N` and bypasses the TERM check, but this is untested.
@@ -118,7 +121,13 @@ For **workflows, flowcharts, sequence diagrams, state machines, ER/class diagram
 
 You can also pipe a diagram in: `... | mermaid.py -`.
 
-### Local-first, with an explicit remote opt-in (privacy)
+### Keep inline diagrams compact and legible
+
+A diagram is displayed *inline in the terminal*, so it is subject to fit-to-screen scaling. A tall diagram (many nodes top-to-bottom) gets downscaled hard to fit the viewport height, and the dark theme's thin light strokes can wash out at that reduction — it reads as a near-blank dark rectangle even though the PNG is fine. To keep diagrams sharp:
+
+- **Prefer wide-and-short over tall-and-narrow.** Use `graph LR` (left→right) instead of `graph TD` when the flow is mostly linear, and keep it to a handful of nodes. A diagram that fits the viewport at native size needs no downscaling and stays crisp.
+- **Split big flows** into a couple of smaller diagrams rather than one giant chart.
+- If a tall diagram is unavoidable and looks washed out, tell the user it was downscaled and offer to render it `--no-show` to a PNG they can open at full size.
 
 The diagram text is the payload — a workflow can encode internal architecture — so rendering is **local by default and never silently leaves the machine**:
 

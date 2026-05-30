@@ -79,7 +79,7 @@ Rendering is **local-first**: the diagram text never leaves your machine unless 
 ## Known limitations
 
 - **Drift margin is a heuristic.** Space reservation adds a small fixed margin to absorb the offset between where the image anchors and where the reserved rows land. For the skill's normal one-line invocation this is stable; a pathologically long, wrapping command could still clip a row or two.
-- **Images taller than the screen** overflow, since reservation is capped at the terminal height. Fit-to-screen downscaling isn't implemented yet.
+- **Images larger than the screen** are automatically scaled down to fit (aspect preserved) using Kitty's `c=`/`r=` placement keys, so they no longer overflow off the bottom. Images that already fit are shown at native size. Auto-fit needs the terminal to report pixel geometry (Kitty does); otherwise it falls back to native size.
 - **Persistence.** Images stay until Kitty scrolls them out of view, you clear the screen, or you run `--clear`. Claude's redraws don't remove them.
 
 ## License
