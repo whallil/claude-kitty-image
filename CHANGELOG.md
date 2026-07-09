@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-09
+### Changed
+- **Images are now drawn with Unicode placeholders instead of direct paint.** `show.py` creates a virtual placement (`a=T,U=1,i=<id>`) and prints a grid of `U+10EEEE` cells to stdout; Kitty substitutes the image where those cells land. Because the cells are ordinary text in Claude Code's committed tool output, the image renders inline and scrolls with the conversation. The old `a=T` direct paint anchored the image at the PTY cursor — during Claude's "Running" phase that is the bottom of the screen — so images appeared pinned below the prompt, clipped at the screen edge, and never scrolled.
+- **Cell geometry is validated rather than trusted.** Claude Code sets its PTY's winsize with the pixel fields left as uninitialized garbage (observed `49049 x 65238` where the real cell is `10 x 22`), which the old `ws_ypixel > 0` guard happily accepted — collapsing a 900x408 image to a 4x1 cell box. `plausible_cell()` now range-checks the derived cell and `resolve_cell()` falls back to a sibling PTY's geometry (same font ⇒ same cell) before a built-in default. The source is reported on stderr.
+- `--clear` now sends `a=d,d=A`, deleting placements *and* stored image data. A bare `a=d` left virtual placements and image data resident in Kitty's memory.
+- `fit_cells()` takes a resolved cell size rather than raw winsize pixels, and caps both dimensions at 297 cells (Kitty's addressable placeholder grid).
+
+### Removed
+- `DRIFT_MARGIN` and the blank-line stdout reservation. Placeholder cells anchor the image exactly, so there is no anchor/stdout offset left to absorb.
+
+### Requirements
+- **Kitty >= 0.28** (>= 0.29.1 recommended). Unicode placeholders do not exist before 0.28 and render as literal garbage glyphs there.
+
+### Notes
+- Callers must not capture or discard `show.py`'s stdout — the placeholder grid *is* the image. `mermaid.py` and `html.py` inherit stdout and are unaffected.
+
 ## [0.4.0] - 2026-05-30
 ### Added
 - **HTML → inline image** (`html.py`): render a live URL, a local HTML file, or stdin HTML to a PNG and display it inline. Drives Puppeteer-core against the system Chrome (installed once into a user cache; no Chromium download), then hands off to `show.py`. Capture modes: viewport (default), `--selector` (one element), `--full-page`.

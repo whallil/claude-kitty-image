@@ -96,9 +96,11 @@ libraries.
 
 ## Known limitations
 
-- **Drift margin is a heuristic.** Space reservation adds a small fixed margin to absorb the offset between where the image anchors and where the reserved rows land. For the skill's normal one-line invocation this is stable; a pathologically long, wrapping command could still clip a row or two.
-- **Images larger than the screen** are automatically scaled down to fit (aspect preserved) using Kitty's `c=`/`r=` placement keys, so they no longer overflow off the bottom. Images that already fit are shown at native size. Auto-fit needs the terminal to report pixel geometry (Kitty does); otherwise it falls back to native size.
-- **Persistence.** Images stay until Kitty scrolls them out of view, you clear the screen, or you run `--clear`. Claude's redraws don't remove them.
+- **Requires Kitty ≥ 0.28** (≥ 0.29.1 recommended). Images are drawn with Unicode placeholders, introduced in 0.28. On an older Kitty the placeholder cells render as literal garbage glyphs rather than an image. Debian 12 ships 0.26.5 — install a current Kitty from [the official installer](https://sw.kovidgoyal.net/kitty/binary/) if you're on an old distro package.
+- **Don't capture `show.py`'s stdout.** The placeholder grid it prints *is* the image. Redirecting stdout to `/dev/null`, or capturing it in a subprocess, transmits the image and then renders nothing.
+- **Images larger than the screen** are automatically scaled down to fit (aspect preserved) using Kitty's `c=`/`r=` placement keys. Images that already fit are shown at native size. Use `--scroll` to fit width only and keep full detail on a tall image. Both dimensions cap at 297 cells (Kitty's addressable placeholder grid).
+- **Cell geometry is validated, not trusted.** Claude Code leaves its PTY's `ws_xpixel`/`ws_ypixel` as garbage, so the sizing math range-checks them and falls back to a sibling PTY's geometry (same font, same cell size) before resorting to a built-in default.
+- **Persistence.** Images stay until their cells scroll out of Kitty's scrollback, you clear the screen, or you run `--clear`. Claude's redraws don't remove them. Because images are now inline text, they scroll away as the conversation grows — that's intended.
 
 ## License
 

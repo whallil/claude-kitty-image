@@ -28,6 +28,7 @@ Exit codes:
 import argparse
 import base64
 import fcntl
+import hashlib
 import math
 import os
 import re
@@ -40,12 +41,114 @@ from pathlib import Path
 # transcoded to PNG via Pillow in ensure_png_bytes().
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
-# The image is painted to the PTY during the Bash "Running" phase, so it anchors
-# a few rows BELOW the top of the stdout reservation (the gap is ~the height of
-# the command-echo header). We over-reserve by DRIFT_MARGIN rows to absorb that
-# offset, and fit-to-screen subtracts the same margin so a downscaled image plus
-# its anchor offset still fit on one screen (no clipped bottom).
-DRIFT_MARGIN = 6
+# ---------------------------------------------------------------------------
+# Cell geometry
+# ---------------------------------------------------------------------------
+# Claude Code calls TIOCSWINSZ on its own PTY with ws_row/ws_col set and the
+# pixel fields left as uninitialized garbage (observed: 49049 x 65238 on a
+# window whose real cell is 10x22). Checking `ws_ypixel > 0` is therefore not
+# enough -- the terminal doesn't stay silent, it lies. We check plausibility,
+# and when our own PTY is untrustworthy we borrow the cell size from a sibling
+# PTY of the same kitty: cell size is a property of the font, not the window.
+
+DEFAULT_CELL = (10.0, 20.0)          # last resort; aspect 0.5 is mid-monospace
+_CELL_W_RANGE = (3.0, 40.0)
+_CELL_H_RANGE = (6.0, 80.0)
+_CELL_ASPECT_RANGE = (0.25, 0.9)     # width/height of any real monospace glyph
+
+
+def plausible_cell(cell_w: float, cell_h: float) -> bool:
+    """True if (cell_w, cell_h) could plausibly be a real terminal cell."""
+    if cell_w <= 0 or cell_h <= 0:
+        return False
+    if not _CELL_W_RANGE[0] <= cell_w <= _CELL_W_RANGE[1]:
+        return False
+    if not _CELL_H_RANGE[0] <= cell_h <= _CELL_H_RANGE[1]:
+        return False
+    return _CELL_ASPECT_RANGE[0] <= cell_w / cell_h <= _CELL_ASPECT_RANGE[1]
+
+
+def cell_from_winsize(ws_row: int, ws_col: int,
+                      ws_xpixel: int, ws_ypixel: int) -> tuple[float, float] | None:
+    """Derive (cell_w, cell_h) from a winsize, or None if it isn't believable."""
+    if ws_row <= 0 or ws_col <= 0 or ws_xpixel <= 0 or ws_ypixel <= 0:
+        return None
+    cell = (ws_xpixel / ws_col, ws_ypixel / ws_row)
+    return cell if plausible_cell(*cell) else None
+
+
+def resolve_cell(primary: dict | None,
+                 siblings: list[dict]) -> tuple[float, float, str]:
+    """Pick the best available cell geometry.
+
+    Returns (cell_w, cell_h, source) where source is 'pty' | 'sibling' | 'default'.
+    """
+    if primary:
+        cell = cell_from_winsize(**primary)
+        if cell:
+            return (*cell, "pty")
+    for ws in siblings:
+        cell = cell_from_winsize(**ws)
+        if cell:
+            return (*cell, "sibling")
+    return (*DEFAULT_CELL, "default")
+
+
+# ---------------------------------------------------------------------------
+# Unicode placeholders
+# ---------------------------------------------------------------------------
+# A virtual placement (a=T,U=1) draws nothing by itself; kitty renders it only
+# where U+10EEEE cells appear in the text stream. Those cells are ordinary text,
+# so they land in Claude Code's committed transcript and scroll with it. The
+# image id rides along as a 24-bit foreground colour; row/column ride as
+# combining diacritics. Kitty auto-increments the column (and reuses the row)
+# when the diacritics are omitted, so only each row's first cell needs them --
+# without that, a full-screen grid blows past Claude's output cap.
+
+PLACEHOLDER = "\U0010eeee"
+_DIACRITICS_FILE = Path(__file__).with_name("rowcolumn-diacritics.txt")
+
+
+def _load_diacritics(path: Path) -> list[int]:
+    codes: list[int] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            codes.append(int(line.split(";")[0], 16))
+    return codes
+
+
+DIACRITICS = _load_diacritics(_DIACRITICS_FILE)
+MAX_GRID = len(DIACRITICS)   # 297: the hard ceiling on addressable rows/columns
+
+
+def image_id_for(png_bytes: bytes) -> int:
+    """A stable, nonzero 24-bit id derived from the image bytes.
+
+    24 bits because the id is carried in a truecolor SGR foreground. Content-
+    derived so re-showing the same image reuses its slot, and two different
+    images on screen at once never collide.
+    """
+    ident = int.from_bytes(hashlib.sha256(png_bytes).digest()[:3], "big") & 0xFFFFFF
+    return ident or 1
+
+
+def placeholder_grid(image_id: int, cols: int, rows: int) -> str:
+    """Build the U+10EEEE cell block that makes a virtual placement visible."""
+    if not 1 <= cols <= MAX_GRID or not 1 <= rows <= MAX_GRID:
+        raise ValueError(
+            f"grid {cols}x{rows} exceeds the {MAX_GRID} addressable rows/columns"
+        )
+    fg = "\x1b[38;2;{};{};{}m".format(
+        (image_id >> 16) & 0xFF, (image_id >> 8) & 0xFF, image_id & 0xFF
+    )
+    col0 = chr(DIACRITICS[0])
+    lines = []
+    for row in range(rows):
+        # First cell pins (row, col=0); the rest are bare and auto-increment.
+        head = PLACEHOLDER + chr(DIACRITICS[row]) + col0
+        lines.append(fg + head + PLACEHOLDER * (cols - 1) + "\x1b[0m")
+    return "\n".join(lines)
 
 
 def ensure_png_bytes(data: bytes, source_path: Path) -> bytes:
@@ -140,31 +243,34 @@ def png_dimensions(png_bytes: bytes) -> tuple[int, int]:
 
 
 def fit_cells(img_w: int, img_h: int, ws_row: int, ws_col: int,
-              ws_xpixel: int, ws_ypixel: int, fit_height: bool = True) -> tuple[int, int]:
-    """Pure sizing math: native image px + terminal geometry -> (cols, rows).
+              cell_w: float, cell_h: float, fit_height: bool = True) -> tuple[int, int]:
+    """Pure sizing math: native image px + cell geometry -> (cols, rows).
 
-    fit_height=True  (default): fit BOTH dims to the viewport (the v0.3.0 path).
+    fit_height=True  (default): fit BOTH dims to the viewport.
     fit_height=False (--scroll): fit WIDTH only; never upscale; leave the height
         uncapped so the image scrolls. The terminal width is an upper bound, not
         a target — a capture narrower than the terminal keeps its native width.
+
+    Both dimensions are capped at MAX_GRID, since a placeholder cell beyond the
+    297th row/column has no diacritic to address it.
     Returns (1, 1) when geometry is unusable.
     """
-    if img_w <= 0 or img_h <= 0 or ws_row <= 0 or ws_ypixel <= 0:
+    if img_w <= 0 or img_h <= 0 or cell_w <= 0 or cell_h <= 0:
         return (1, 1)
-    cell_h = ws_ypixel / ws_row
-    cell_w = (ws_xpixel / ws_col) if (ws_col > 0 and ws_xpixel > 0) else (cell_h / 2.0)
     nat_c = max(1, math.ceil(img_w / cell_w))
     nat_r = max(1, math.ceil(img_h / cell_h))
     avail_c = max(1, (ws_col - 1) if ws_col > 0 else nat_c)
+    avail_c = min(avail_c, MAX_GRID)
 
     if not fit_height:
-        # Fit width only. Never enlarge; height uncapped (scrolls).
-        if nat_c <= avail_c:
+        # Fit width only. Never enlarge; height uncapped (scrolls) up to MAX_GRID.
+        scale = min(1.0, avail_c / nat_c, MAX_GRID / nat_r)
+        if scale >= 1.0:
             return (nat_c, nat_r)
-        scale = avail_c / nat_c
-        return (avail_c, max(1, round(nat_r * scale)))
+        return (max(1, min(avail_c, round(nat_c * scale))),
+                max(1, min(MAX_GRID, round(nat_r * scale))))
 
-    avail_r = max(1, ws_row - 2 - DRIFT_MARGIN)
+    avail_r = max(1, min(ws_row - 2 if ws_row > 0 else nat_r, MAX_GRID))
     if nat_c <= avail_c and nat_r <= avail_r:
         return (nat_c, nat_r)
     scale = min(avail_c / nat_c, avail_r / nat_r)
@@ -173,49 +279,100 @@ def fit_cells(img_w: int, img_h: int, ws_row: int, ws_col: int,
     return (fit_c, fit_r)
 
 
-def placement_cells(tty_fd: int, png_bytes: bytes, fit_height: bool = True) -> tuple[int, int]:
-    """Return (cols, rows) for the image, querying the PTY geometry then
-    delegating the math to fit_cells(). See fit_cells for the fit_height modes."""
+def read_winsize(fd: int) -> dict:
+    """TIOCGWINSZ -> {ws_row, ws_col, ws_xpixel, ws_ypixel}."""
+    packed = fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\x00" * 8)
+    ws_row, ws_col, ws_xpixel, ws_ypixel = struct.unpack("HHHH", packed)
+    return dict(ws_row=ws_row, ws_col=ws_col,
+                ws_xpixel=ws_xpixel, ws_ypixel=ws_ypixel)
+
+
+def sibling_winsizes(exclude: str) -> list[dict]:
+    """Winsizes of every other PTY we can open, for cell-geometry fallback.
+
+    O_NOCTTY is mandatory: opening a PTY slave without it would make that PTY
+    our controlling terminal if we happen to be a session leader without one.
+    O_NONBLOCK avoids blocking on a PTY with no writer.
+    """
+    out: list[dict] = []
+    try:
+        entries = sorted(e for e in os.listdir("/dev/pts") if e.isdigit())
+    except OSError:
+        return out
+    for entry in entries:
+        path = f"/dev/pts/{entry}"
+        if path == exclude:
+            continue
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
+        except OSError:
+            continue
+        try:
+            out.append(read_winsize(fd))
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+    return out
+
+
+def placement_cells(tty_fd: int, pts_path: str, png_bytes: bytes,
+                    fit_height: bool = True) -> tuple[int, int, str]:
+    """Return (cols, rows, cell_source) for the image."""
     img_w, img_h = png_dimensions(png_bytes)
     try:
-        packed = fcntl.ioctl(tty_fd, termios.TIOCGWINSZ, b"\x00" * 8)
-        ws_row, ws_col, ws_xpixel, ws_ypixel = struct.unpack("HHHH", packed)
+        primary = read_winsize(tty_fd)
     except OSError:
-        return (1, 1)
-    return fit_cells(img_w, img_h, ws_row, ws_col, ws_xpixel, ws_ypixel, fit_height)
+        primary = None
+    cell_w, cell_h, source = resolve_cell(primary, sibling_winsizes(pts_path))
+    ws_row = primary["ws_row"] if primary else 0
+    ws_col = primary["ws_col"] if primary else 0
+    cols, rows = fit_cells(img_w, img_h, ws_row, ws_col, cell_w, cell_h, fit_height)
+    return cols, rows, source
 
 
-def send_kitty_graphics(png_bytes: bytes, pts_path: str, fit_height: bool = True) -> tuple[int, int]:
-    """Write Kitty graphics protocol escapes to pts_path.
+def send_kitty_graphics(png_bytes: bytes, pts_path: str,
+                        fit_height: bool = True) -> tuple[int, int, int, str]:
+    """Transmit the image and create a VIRTUAL placement (U=1).
 
-    Returns (chunk_count, image_rows). We set cursor policy C=1 so the image
-    placement does not move the cursor, and pass c=/r= so Kitty scales the image
-    to fit the viewport (see placement_cells). The caller reserves vertical space
-    via stdout (see main) rather than via PTY newlines, because directly-injected
-    newlines don't survive Claude Code's independent screen repaint.
+    Returns (chunk_count, cols, rows, cell_source).
+
+    A virtual placement draws nothing on its own — it only appears where the
+    caller prints U+10EEEE placeholder cells (see placeholder_grid). That is the
+    entire point: direct-paint (a=T without U=1) anchors the image at the PTY
+    cursor, which during Claude Code's "Running" phase sits at the bottom of the
+    screen, so the image ends up pinned below the prompt and clipped. Placeholder
+    cells are ordinary text in Claude's committed stdout, so the image lands in
+    the transcript and scrolls with it.
+
+    q=2 suppresses kitty's OK response, which would otherwise be written into
+    claude's stdin.
     """
     b64 = base64.standard_b64encode(png_bytes).decode("ascii")
     chunk_size = 4096
     chunks = [b64[i : i + chunk_size] for i in range(0, len(b64), chunk_size)]
+    image_id = image_id_for(png_bytes)
     with open(pts_path, "w") as tty:
-        cols, rows = placement_cells(tty.fileno(), png_bytes, fit_height)
-        # No leading newline: C=1 keeps the cursor put, and the stdout block (see
-        # main) reserves the rows, so a leading PTY newline only adds an
-        # uncommitted top gap that Claude's renderer doesn't account for.
+        cols, rows, source = placement_cells(tty.fileno(), pts_path, png_bytes, fit_height)
         for i, chunk in enumerate(chunks):
             more = 1 if i < len(chunks) - 1 else 0
             if i == 0:
-                tty.write(f"\x1b_Gf=100,a=T,C=1,c={cols},r={rows},m={more};{chunk}\x1b\\")
+                tty.write(f"\x1b_Ga=T,U=1,i={image_id},f=100,"
+                          f"c={cols},r={rows},q=2,m={more};{chunk}\x1b\\")
             else:
                 tty.write(f"\x1b_Gm={more};{chunk}\x1b\\")
         tty.flush()
-    return len(chunks), rows
+    return len(chunks), cols, rows, source
 
 
 def clear_images(pts_path: str) -> None:
-    """Send 'delete all images' escape sequence."""
+    """Delete all placements AND the stored image data.
+
+    d=A is required: a bare `a=d` deletes only *visible* placements, leaving
+    virtual placements and the images themselves resident in kitty's memory.
+    """
     with open(pts_path, "w") as tty:
-        tty.write("\x1b_Ga=d\x1b\\")
+        tty.write("\x1b_Ga=d,d=A,q=2\x1b\\")
         tty.flush()
 
 
@@ -271,24 +428,23 @@ def main() -> int:
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
         return 6
-    n, rows = send_kitty_graphics(png_data, pts, fit_height=not args.scroll)
+    n, cols, rows, cell_source = send_kitty_graphics(png_data, pts,
+                                                     fit_height=not args.scroll)
     converted = "" if png_data is data else " (converted to PNG)"
-    # Reserve the image's height as REAL rows in Claude's committed tool-result
-    # block. stdout is the only channel Claude's renderer accounts for, so blank
-    # lines here scroll and pack correctly with the rest of the conversation;
-    # newlines written to the PTY do not. DRIFT_MARGIN (module-level) over-reserves
-    # to absorb the anchor offset so the image floats inside the blank block
-    # instead of spilling onto the text that follows; the trailing caption marker
-    # keeps the rows from being trimmed as trailing whitespace.
-    reserved = rows + DRIFT_MARGIN
+    # The placeholder grid IS the image, as far as Claude's renderer is concerned:
+    # ordinary text cells in the committed tool-result block. No blank-line
+    # reservation and no drift margin are needed, because the image is anchored by
+    # these cells rather than by wherever the PTY cursor happened to be.
+    #
     # Strip non-printable characters from the filename before echoing it, so a
     # name containing terminal control/escape bytes can't smuggle anything into
     # the output. (Defense-in-depth: this goes to stdout, not the raw PTY.)
     safe_name = "".join(c for c in p.name if c.isprintable()) or "image"
-    sys.stdout.write("\n" * (reserved - 1))
-    sys.stdout.write(f"└─ {safe_name}\n")  # caption + trim guard for the blank rows
-    print(f"[kitty-image] sent {len(png_data)} bytes ({n} chunks, "
-          f"{reserved} rows reserved for {rows}-row image) to {pts}{converted}",
+    sys.stdout.write(placeholder_grid(image_id_for(png_data), cols, rows) + "\n")
+    sys.stdout.write(f"└─ {safe_name}\n")
+    print(f"[kitty-image] sent {len(png_data)} bytes ({n} chunks) as a "
+          f"{cols}x{rows} cell placement to {pts} "
+          f"[cell geometry: {cell_source}]{converted}",
           file=sys.stderr)
     return 0
 
